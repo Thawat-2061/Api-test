@@ -59,34 +59,53 @@ app.post("/register", async (req, res) => {
 // Login route
 app.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "กรุณาใส่ email และ password" });
+    const { identifier, password } = req.body;
+    if (!identifier || !password) {
+      return res.status(400).json({ error: "กรุณาใส่ email หรือ username และ password" });
     }
 
-    const snap = await db.collection("users").where("email", "==", email).get();
-    if (snap.empty) {
-      return res.status(404).json({ error: "ไม่พบบัญชีผู้ใช้" });
+    const usersRef = db.collection("users");
+
+    // เช็ค email ก่อน
+    let snapshot = await usersRef
+      .where("email", "==", identifier)
+      .limit(1)
+      .get();
+
+    // ถ้าไม่เจอ email → เช็ค username
+    if (snapshot.empty) {
+      snapshot = await usersRef
+        .where("username", "==", identifier)
+        .limit(1)
+        .get();
     }
 
-    const user = snap.docs[0].data();
-    const match = await bcrypt.compare(password, user.password);
-
-    if (!match) {
-      return res.status(401).json({ error: "รหัสผ่านไม่ถูกต้อง" });
+    if (snapshot.empty) {
+      return res.status(401).json({ error: "User not found" });
     }
 
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+
+    // เช็ค password
+    const isValid = await bcrypt.compare(password, userData.password);
+    if (!isValid) {
+      return res.status(401).json({ error: "Invalid password" });
+    }
+
+    // ส่ง response ถูกต้อง
     res.json({
       message: "เข้าสู่ระบบสำเร็จ",
-      uid: user.uid,
-      email: user.email,
-      role: user.role,
+      uid: userData.uid,
+      email: userData.email,
+      role: userData.role,
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "server error" });
   }
 });
+
 
 // Profile update route
 app.post("/profile", async (req, res) => {
@@ -143,36 +162,103 @@ app.post("/changepass", async (req, res) => {
   }
 });
 
-//upload to firestore
-app.post("/upload", async (req, res) => {
+//upload pending file route
+app.post("/pending", async (req, res) => {
   try {
-    const { downloadURL, filename, type, description } = req.body;
+    const { downloadURL, filename, type, description, uploadedBy } = req.body;
 
-    // สร้าง doc auto ID
-    const docRef = db.collection("files").doc(); // auto-generated ID
+    if (!downloadURL || !type) {
+      return res.status(400).json({ error: "missing fields" });
+    }
+
+    const docRef = db.collection("files_pending").doc();
     const file_id = docRef.id;
 
     await docRef.set({
-      file_id,       // auto ID
+      file_id,
       downloadURL,
-      filename,
+      filename: filename || "",
       type,
-      description,
-      createdAt: new Date().toISOString()
+      description: description || "",
+      status: "pending",
+
+      uploadedBy: uploadedBy || {
+        uid: "anonymous",
+        name: "unknown",
+      },
+
+      createdAt: new Date().toISOString(),
     });
 
-    res.json({ message: "success", file_id });
+    res.json({ message: "pending uploaded", file_id });
   } catch (err) {
+    console.error("UPLOAD_PENDING ERROR:", err);
     res.status(500).json({ error: String(err) });
   }
 });
+
+//approve file route
+app.post("/approved", async (req, res) => {
+  try {
+    const { file_id, approvedBy } = req.body;
+
+    if (!file_id) {
+      return res.status(400).json({ error: "missing file_id" });
+    }
+
+    const pendingRef = db.collection("files_pending").doc(file_id);
+    const snap = await pendingRef.get();
+
+    if (!snap.exists) {
+      return res.status(404).json({ error: "pending not found" });
+    }
+
+    const data = snap.data();
+    const bucket = admin.storage().bucket();
+
+    const oldPath = data.storagePath; // pending/images/xxx.jpg
+    const newPath = oldPath.replace("pending/", "approved/");
+
+    await bucket.file(oldPath).copy(bucket.file(newPath));
+
+    const [approvedUrl] = await bucket
+      .file(newPath)
+      .getSignedUrl({
+        action: "read",
+        expires: "03-01-2500",
+      });
+
+    await db.collection("files_approved").doc(file_id).set({
+      ...data,
+      downloadURL: approvedUrl,
+      storagePath: newPath,
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      approvedBy: approvedBy || { uid: "admin", name: "admin" },
+    });
+
+    await db.collection("files_history").add({
+      file_id,
+      action: "approved",
+      from: "pending",
+      to: "approved",
+      at: new Date().toISOString(),
+    });
+
+    res.json({ message: "approved success", file_id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 
 /* ---------- ROOT ---------- */
 app.get("/", (req, res) => {
   res.send("✅ API with Firestore is running!");
 });
 
-/* ---------- LISTEN (สำคัญมาก) ---------- */
+/* ---------- LISTEN  ---------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
