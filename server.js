@@ -49,6 +49,13 @@ app.post("/register", async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    const ref2 = db.collection("friends").doc();
+    await ref2.set({
+      uid: ref.id,
+      friendsList: [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }); 
+
     res.json({ message: "สมัครสมาชิกสำเร็จ" });
   } catch (e) {
     console.error(e);
@@ -106,6 +113,57 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.put("/addfriend", async (req, res) => {
+  try {
+    const { uid, friendUid } = req.body;
+
+    if (!uid || !friendUid) {
+      return res.status(400).json({ error: "กรุณาส่ง uid และ friendUid" });
+    }
+
+    /* 1. ตรวจสอบ friendUid จาก users */
+    const friendRef = db.collection("users").doc(friendUid);
+    const friendDoc = await friendRef.get();
+
+    if (!friendDoc.exists) {
+      return res.status(404).json({ error: "ไม่พบบัญชีเพื่อน" });
+    }
+
+    /* 2. อ้างอิง friends/{uid} */
+    const userFriendRef = db.collection("friends").doc(uid);
+    const userFriendDoc = await userFriendRef.get();
+
+    let friendsList = [];
+
+    if (userFriendDoc.exists) {
+      friendsList = userFriendDoc.data().friendsList || [];
+
+      if (friendsList.includes(friendUid)) {
+        return res.status(400).json({ error: "เพื่อนนี้ถูกเพิ่มแล้ว" });
+      }
+    }
+
+    /* 3. เพิ่ม friendUid */
+    friendsList.push(friendUid);
+
+    /* 4. ใช้ set + merge เพื่อรองรับกรณีไม่มี doc */
+    await userFriendRef.set(
+      {
+        friendsList,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    res.json({
+      message: "เพิ่มเพื่อนสำเร็จ",
+      friendsList,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
+  }
+});
 
 // Profile update route
 app.post("/profile", async (req, res) => {
@@ -252,6 +310,81 @@ app.post("/approved", async (req, res) => {
   }
 });
 
+app.post("/newproject", async (req, res) => {
+  try {
+    const { projectName, description, createdBy } = req.body;
+
+    if (!projectName) {
+      return res.status(400).json({ error: "missing projectName" });
+    }
+
+    const docRef = db.collection("projects").doc();
+    const projectId = docRef.id;
+
+    await docRef.set({
+      projectId,
+      projectName,
+      description: description || "",
+      images: "",
+      createdBy: createdBy || { uid: "admin", name: "admin" },
+      createdAt: new Date().toISOString(),
+    });
+
+    // const data_project = db.collection("data_project").doc();
+    // await data_project.set({
+    //   projectId,
+    //   data: [],
+    //   createdAt: new Date().toISOString(),
+    // });
+
+    res.json({ message: "project created", projectId });
+  } catch (err) {
+    console.error("NEW_PROJECT ERROR:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get("/projectlist", async (req, res) => {
+  try {
+    const snapshot = await db.collection("projects").get();
+    const projects = snapshot.docs.map((doc) => doc.data());
+    res.json({ projects });
+  } catch (err) {
+    console.error("PROJECT_LIST ERROR:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/projectimage", async (req, res) => {
+  try {
+    const { projectId, imageUrl } = req.body;
+
+    if (!projectId || !imageUrl) {
+      return res.status(400).json({ error: "missing fields" });
+    }
+
+    const projectRef = db.collection("projects").doc(projectId);
+    const snap = await projectRef.get();
+
+    if (!snap.exists) {
+      return res.status(404).json({ error: "project not found" });
+    }
+
+    const projectData = snap.data();
+    const updatedImages = projectData.images || [];
+    updatedImages.push(imageUrl);
+
+    await projectRef.update({
+      images: updatedImages,
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({ message: "image added to project", projectId });
+  } catch (err) {
+    console.error("UPLOAD_PROJECT_IMAGE ERROR:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
 
 /* ---------- ROOT ---------- */
 app.get("/", (req, res) => {
