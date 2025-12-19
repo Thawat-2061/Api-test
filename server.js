@@ -113,6 +113,98 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.post("/getuser", async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) {
+      return res.status(400).json({ error: "กรุณาส่ง uid" });
+    }
+
+    const ref = db.collection("users").doc(uid);
+    const doc = await ref.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: "ไม่พบบัญชีผู้ใช้" });
+    }
+
+    const data = doc.data();
+    res.json({
+      uid: data.uid,
+      username: data.username,
+      email: data.email,
+      role: data.role,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+app.post("/searchuser", async (req, res) => {
+  try {
+    let { query } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: "กรุณาส่ง query" });
+    }
+
+    // normalize
+    query = query.toLowerCase().trim();
+
+    const usersRef = db.collection("users");
+
+    /* 🔹 query ที่ 1 : searchKeywords (แนะนำ) */
+    const keywordSnap = await usersRef
+      .where("searchKeywords", "array-contains", query)
+      .limit(10)
+      .get();
+
+    let docs = keywordSnap.docs;
+
+    /* 🔹 fallback (กรณี user เก่าไม่มี searchKeywords) */
+    if (docs.length === 0) {
+      const [usernameSnap, emailSnap] = await Promise.all([
+        usersRef
+          .where("username", ">=", query)
+          .where("username", "<=", query + "\uf8ff")
+          .limit(10)
+          .get(),
+
+        usersRef
+          .where("email", ">=", query)
+          .where("email", "<=", query + "\uf8ff")
+          .limit(10)
+          .get(),
+      ]);
+
+      // merge + กันซ้ำ
+      const map = new Map();
+      [...usernameSnap.docs, ...emailSnap.docs].forEach((doc) => {
+        map.set(doc.id, doc);
+      });
+
+      docs = [...map.values()];
+    }
+
+    const results = docs.map((doc) => {
+      const data = doc.data();
+      return {
+        uid: data.uid || doc.id,
+        username: data.username,
+        email: data.email,
+      };
+    });
+
+    res.json({ results });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+
+// Add friend route
+
 app.put("/addfriend", async (req, res) => {
   try {
     const { uid, friendUid } = req.body;
@@ -325,17 +417,26 @@ app.post("/newproject", async (req, res) => {
       projectId,
       projectName,
       description: description || "",
-      images: "",
+      images: null,
       createdBy: createdBy || { uid: "admin", name: "admin" },
       createdAt: new Date().toISOString(),
     });
 
-    // const data_project = db.collection("data_project").doc();
-    // await data_project.set({
-    //   projectId,
-    //   data: [],
-    //   createdAt: new Date().toISOString(),
-    // });
+    const data_project = db.collection("project_details").doc();
+    await data_project.set({
+      projectId,
+      Sequences: [
+        { WaitToStart: null, Final: null, Inprogress: null, blank: null},
+      
+      ],
+      ShotStatus: [
+        { Final: null, WaitToStart: null , Inprogress: null, blank: null },
+      ],
+      AssetStatus: [
+        { Art: null, Model: null, Rig: null , Texture: null, Layout: null , Animation: null, FX: null, Light: null, Comp: null },
+      ],
+      createdAt: new Date().toISOString(),
+    });
 
     res.json({ message: "project created", projectId });
   } catch (err) {
