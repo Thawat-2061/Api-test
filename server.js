@@ -4,12 +4,13 @@ import bodyParser from "body-parser";
 import bcrypt from "bcrypt";
 import admin from "firebase-admin";
 import dotenv from "dotenv";
+dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-dotenv.config();
+
 
 // Firebase Admin SDK initialization
 admin.initializeApp({
