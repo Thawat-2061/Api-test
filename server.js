@@ -508,15 +508,24 @@ app.post("/projectinfo", async (req, res) => {
   }
 });
 
-app.get("/projectlist", async (req, res) => {
+app.post("/projectlist", async (req, res) => {
+  const {uid} = req.body;
   try {
-    const snapshot = await db.collection("projects").get();
-    const projects = snapshot.docs.map((doc) => doc.data());
+    let query = db.collection("projects");
+
+    // ถ้ามี uid ให้กรองโดย createdBy.uid
+    if (uid) {
+      query = query.where("createdBy.uid", "==", uid);
+    }
+
+    const snap = await query.get();
+    const projects = snap.docs.map((doc) => doc.data());
+
     res.json({ projects });
   } catch (err) {
     console.error("PROJECT_LIST ERROR:", err);
     res.status(500).json({ error: String(err) });
-  }
+  }   
 });
 
 app.post("/projectimage", async (req, res) => {
