@@ -2,8 +2,7 @@ import express from "express";
 import cors from "cors";
 import bcrypt from "bcrypt";
 
-
-import { bucket, db } from "./firebaseAdmin.js";
+import { db, bucket } from "./firebaseAdmin.js";
 
 const app = express();
 

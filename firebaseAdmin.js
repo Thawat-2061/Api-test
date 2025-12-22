@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-dotenv.config(); // ⬅️ สำคัญมาก ต้องอยู่บนสุด
+dotenv.config(); 
 
 import admin from "firebase-admin";
 
@@ -13,6 +13,8 @@ if (!admin.apps.length) {
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
   });
 }
+console.log("PROJECT_ID =", process.env.FIREBASE_PROJECT_ID);
+
 
 export const db = admin.firestore();
 export const bucket = admin.storage().bucket();
