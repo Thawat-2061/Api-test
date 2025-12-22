@@ -100,19 +100,23 @@ app.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid password" });
     }
 
-    // ส่ง response ถูกต้อง
+    // ส่ง response ในรูปแบบที่ Frontend ต้องการ
     res.json({
       message: "เข้าสู่ระบบสำเร็จ",
-      uid: userData.uid,
-      email: userData.email,
-      role: userData.role,
+      token: "dummy-token", // ถ้ามี JWT ให้สร้างตรงนี้
+      user: {
+        uid: userData.uid,
+        username: userData.username,
+        email: userData.email,
+        name: userData.name || userData.username, // เพิ่ม name
+        role: userData.role,
+      }
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "server error" });
   }
 });
-
 app.post("/getuser", async (req, res) => {
   try {
     const { uid } = req.body;
@@ -404,7 +408,7 @@ app.post("/approved", async (req, res) => {
 
 app.post("/newproject", async (req, res) => {
   try {
-    const { projectName, description, createdBy } = req.body;
+    const { projectName, description, createdBy, template } = req.body;
 
     if (!projectName) {
       return res.status(400).json({ error: "missing projectName" });
@@ -416,6 +420,7 @@ app.post("/newproject", async (req, res) => {
     await docRef.set({
       projectId,
       projectName,
+      template: template || "",
       description: description || "",
       images: null,
       createdBy: createdBy || { uid: "admin", name: "admin" },
@@ -426,21 +431,79 @@ app.post("/newproject", async (req, res) => {
     await data_project.set({
       projectId,
       Sequences: [
-        { WaitToStart: null, Final: null, Inprogress: null, blank: null},
-      
+        { WaitToStart: null, Final: null, Inprogress: null, blank: null },
       ],
       ShotStatus: [
-        { Final: null, WaitToStart: null , Inprogress: null, blank: null },
+        { Final: null, WaitToStart: null, Inprogress: null, blank: null },
       ],
       AssetStatus: [
-        { Art: null, Model: null, Rig: null , Texture: null, Layout: null , Animation: null, FX: null, Light: null, Comp: null },
+        { Art: null, Model: null, Rig: null, Texture: null, Layout: null, Animation: null, FX: null, Light: null, Comp: null },
       ],
       createdAt: new Date().toISOString(),
     });
 
-    res.json({ message: "project created", projectId });
+    res.json({ 
+      message: "project created", 
+      projectId,
+      token: "dummy-token",
+      user: createdBy || { uid: "admin", name: "admin"  }
+    });
   } catch (err) {
     console.error("NEW_PROJECT ERROR:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/projectdetails", async (req, res) => {
+  try {
+    const { projectId } = req.body;
+
+    if (!projectId) {
+      return res.status(400).json({ error: "missing projectId" });
+    }
+
+    const projectDoc = await db.collection("projects").doc(projectId).get();
+    
+    if (!projectDoc.exists) {
+      return res.status(404).json({ error: "project not found" });
+    }
+
+    const detailsRef = db.collection("project_details").where("projectId", "==", projectId);
+    const detailsSnap = await detailsRef.get();
+
+    const projectDetails = detailsSnap.empty ? null : detailsSnap.docs[0].data();
+
+    // ✅ แก้ไข response structure ให้ตรงกับ Navbar
+    res.json({ 
+      project: {
+        ...projectDoc.data(),  // รวมข้อมูลทั้งหมดของ project
+        projectId: projectId
+      },
+      projectDetails: projectDetails  // ข้อมูลเพิ่มเติม (ถ้ามี)
+    });
+  } catch (err) {
+    console.error("PROJECT_DETAILS ERROR:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post("/projectinfo", async (req, res) => {
+  try {
+    const { projectId } = req.body;
+
+    if (!projectId) {
+      return res.status(400).json({ error: "missing projectId" });
+    }
+
+    const doc = await db.collection("projects").doc(projectId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: "project not found" });
+    }
+
+    res.json({ project: doc.data() });
+  } catch (err) {
+    console.error("PROJECT_INFO ERROR:", err);
     res.status(500).json({ error: String(err) });
   }
 });
