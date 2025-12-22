@@ -3,22 +3,24 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import bcrypt from "bcrypt";
 import admin from "firebase-admin";
+import dotenv from "dotenv";
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+dotenv.config();
 
 // Firebase Admin SDK initialization
 admin.initializeApp({
   credential: admin.credential.cert({
-    projectId: "shotgrid-promax",
-    clientEmail: "firebase-adminsdk-fbsvc@shotgrid-promax.iam.gserviceaccount.com",
-    privateKey: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDOFhi8u4BmV6qH\n9RNrgIKNyfLQUJmznOGrRaGfPXX9FyKn06wlnGrGyPBr1ur6RrSd+DnFI6/XAOfK\nPnDJSed/8AenNOaRiYKkN6LXxVjRs4wVevd086JXsSYvkpQXmfRTF/EXASINewfg\nbKIsjO2mupMqngCUn6QmtYENwb2T2gMFm97hKK2zaBs/3Jq+/LtQbWdHDDVlfaEp\nVNHihNTNDY1K4g38gjX7y0iVxlVZDsMQ31dS5CjKh1ud4Src8SveyzXyREEc18YG\njCRTqfjQQ1QYibg5B71wuUd0ld2i7FwuwHyXBLxEzkJeYEu9yoe1elQXI13qQbbT\nZgjAfDAdAgMBAAECggEAU91HHMqasksbkO8pA3bM6gFUB/S8z4xYg1e3MTOUJ7W5\n+xzW8YlJJHLR77iKb+XFC4HflHt0y6RJLxKg2DD0fapCmwcaiwAwAz7GzFK5VcDg\nkT80o0mf91qWJQbbsA0NEaFtEUT7RAwchPYAOuvwrAhB6jZZGyIp7Tywc1YznQ4A\nZH8+It4PcihSrdEj8p0tFrQKDpNu7lJVQDYszr/hUNvzaovNwmR9llz1uXL01LIo\nmVbli+9jEJ1CbsbWbS9p7rLWUgDIJyY/KEXR1knIBtnG30EzElIUkCoH3HvdCLNm\nXXDyIXIXW+yH9ArJfuLQRYwKmLz9AMnldkXGiVoTewKBgQDsvgJs7RLoLDk156ie\nZvLCWkKLm94KDcA0MKQVfAHMZ09na64N+KKfvn29sBOCK1vw/JDPMxfG5Elyp6kL\njwkrvk5mISOX/KzF/1R6IXGM//SMSaRfwqzvNMA6sHOKNbANz1jT4ub98t2w1+BO\noMZ1AOQUxTPDTV6waMFJJ0JnKwKBgQDe2bMKHseIN5/PbIadsg1dIgYgBZuN7nD/\ndgee9M9kXiW8y/NEMxkUhS81fb/bjpTEp7kf7JG6VHkxXxD4jFgnYro+vUzGrAas\ntD1BU4cYnjoY7I+TVmS483OfsVs4B9Uj9gsksdRZ/JFEI0D4ly8YHGlIyqRumU6v\nUFXT08Eh1wKBgQDOYz/eEjf/bD5b/h+EKJ/OS73j0/iYrzA2z4jcqgUvW4lf0gIl\nb/LmbL1WFyCKxJ4c0zKzUAmUfQSDDiNTTlliZ0AVzSIoqEE/Q78z0eAaWjGp87F3\nQlJdH5HOGHJBtVhMUc1Qu2lBTu9x8mE8avFYo3Qzn0/nHZZFGK4Yxj8fjQKBgAmL\ne36oeNVdxIuG03E3qhjeFzMR6mq21sIqVQM66xMacTVX6vB129IkLjR1UV1fCwIt\nSOGUKV24toQl1T1ADZqKQP3k77/mqFaHVcRRhozIYialIzUlUyUU0FP7rbOFqlxi\n8nE86KJ+Dd7EP8kl+I9o0B2dCFPwXw1lPHfZLwF7AoGARQLSgZztz87pKNWT2IEx\nTFXpx8M+lh1XWRWkzAu8Cc3cOGe8aqrU8+6S8MODQLDRhZAFa2yL3CqNWfIH6DGL\nHYZQTENQrPYu+FXEfxjrVWHq5cODlMrg94NjZ9dQ9VxBn5lJC0Ic+QHV7Ze21Ljs\netPXMzP3nxBsCDpybcvr/DI=\n-----END PRIVATE KEY-----\n",
-    
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
   }),
-    storageBucket: "shotgrid-promax.appspot.com"
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
 });
+
 
 const db = admin.firestore();
 export const bucket = admin.storage().bucket();
