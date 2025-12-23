@@ -304,91 +304,81 @@ app.post("/changepass", async (req, res) => {
 });
 
 //upload pending file route
-app.post("/pending", async (req, res) => {
+app.post("/upload", async (req, res) => {
   try {
-    const { downloadURL, filename, type, description, uploadedBy } = req.body;
+    const {
+      projectId,        // ⭐ เพิ่มตรงนี้
+      downloadURL,
+      filename,
+      type,
+      description,
+      uploadedBy,
+      storagePath,
+    } = req.body;
 
-    if (!downloadURL || !type) {
-      return res.status(400).json({ error: "missing fields" });
+    if (!downloadURL || !type || !storagePath || !projectId) {  // ⭐ เช็ค projectId
+      return res.status(400).json({ error: "missing required fields" });
     }
 
-    const docRef = db.collection("files_pending").doc();
+    const docRef = db.collection("files_project").doc();
     const file_id = docRef.id;
 
     await docRef.set({
       file_id,
+      projectId,        
       downloadURL,
       filename: filename || "",
       type,
       description: description || "",
-      status: "pending",
-
-      uploadedBy: uploadedBy || {
-        uid: "anonymous",
-        name: "unknown",
-      },
-
+      storagePath,
       createdAt: new Date().toISOString(),
     });
 
-    res.json({ message: "pending uploaded", file_id });
+    res.json({
+      message: "upload success (pending)",
+      file_id,
+      downloadURL  // ⭐ ส่งกลับไปด้วย
+    });
   } catch (err) {
-    console.error("UPLOAD_PENDING ERROR:", err);
+    console.error("UPLOAD ERROR:", err);
     res.status(500).json({ error: String(err) });
   }
 });
 
-//approve file route
-app.post("/approved", async (req, res) => {
+
+app.post("/getProjectImages", async (req, res) => {
   try {
-    const { file_id, approvedBy } = req.body;
+    const { projectIds } = req.body;
 
-    if (!file_id) {
-      return res.status(400).json({ error: "missing file_id" });
+    if (!projectIds || !Array.isArray(projectIds)) {
+      return res.status(400).json({ error: "projectIds array required" });
     }
 
-    const pendingRef = db.collection("files_pending").doc(file_id);
-    const snap = await pendingRef.get();
+    const images = {};
 
-    if (!snap.exists) {
-      return res.status(404).json({ error: "pending not found" });
+    for (const projectId of projectIds) {
+      const snapshot = await db
+        .collection("files_project")
+        .where("projectId", "==", projectId)
+        .where("type", "==", "images")
+        .get();  
+
+      if (!snapshot.empty) {
+        const docs = snapshot.docs
+          .map(doc => doc.data())
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        
+        if (docs.length > 0) {
+          images[projectId] = docs[0].downloadURL;
+        }
+      }
     }
 
-    const data = snap.data();
-    const bucket = admin.storage().bucket();
+    console.log("📸 Fetched images:", images);
+    res.json({ images });
 
-    const oldPath = data.storagePath; // pending/images/xxx.jpg
-    const newPath = oldPath.replace("pending/", "approved/");
-
-    await bucket.file(oldPath).copy(bucket.file(newPath));
-
-    const [approvedUrl] = await bucket
-      .file(newPath)
-      .getSignedUrl({
-        action: "read",
-        expires: "03-01-2500",
-      });
-
-    await db.collection("files_approved").doc(file_id).set({
-      ...data,
-      downloadURL: approvedUrl,
-      storagePath: newPath,
-      status: "approved",
-      approvedAt: new Date().toISOString(),
-      approvedBy: approvedBy || { uid: "admin", name: "admin" },
-    });
-
-    await db.collection("files_history").add({
-      file_id,
-      action: "approved",
-      from: "pending",
-      to: "approved",
-      at: new Date().toISOString(),
-    });
-
-    res.json({ message: "approved success", file_id });
   } catch (err) {
-    console.error(err);
+    console.error("❌ GET PROJECT IMAGES ERROR:", err);
     res.status(500).json({ error: String(err) });
   }
 });
@@ -460,13 +450,12 @@ app.post("/projectdetails", async (req, res) => {
 
     const projectDetails = detailsSnap.empty ? null : detailsSnap.docs[0].data();
 
-    // ✅ แก้ไข response structure ให้ตรงกับ Navbar
     res.json({ 
       project: {
-        ...projectDoc.data(),  // รวมข้อมูลทั้งหมดของ project
+        ...projectDoc.data(), 
         projectId: projectId
       },
-      projectDetails: projectDetails  // ข้อมูลเพิ่มเติม (ถ้ามี)
+      projectDetails: projectDetails 
     });
   } catch (err) {
     console.error("PROJECT_DETAILS ERROR:", err);
@@ -500,7 +489,6 @@ app.post("/projectlist", async (req, res) => {
   try {
     let query = db.collection("projects");
 
-    // ถ้ามี uid ให้กรองโดย createdBy.uid
     if (uid) {
       query = query.where("createdBy.uid", "==", uid);
     }

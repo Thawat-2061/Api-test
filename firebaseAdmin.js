@@ -13,7 +13,7 @@ if (!admin.apps.length) {
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
   });
 }
-console.log("PROJECT_ID =", process.env.FIREBASE_PROJECT_ID);
+// console.log("PROJECT_ID =", process.env.FIREBASE_PROJECT_ID);
 
 
 export const db = admin.firestore();
