@@ -14,13 +14,16 @@ app.use(express.urlencoded({ extended: true }));
 // Registration route
 app.post("/register", async (req, res) => {
   try {
-    const { username, email, password, role } = req.body ?? {};
+    const { username, email, password, role, avartarURL } = req.body ?? {};
 
     if (!username || !email || !password) {
       return res.status(400).json({ error: "กรุณากรอกข้อมูลให้ครบ" });
     }
 
-    // 🔍 check duplicate email
+    if (!avartarURL || typeof avartarURL !== "string") {
+      return res.status(400).json({ error: "avartarURL is required" });
+    }
+
     const snap = await db
       .collection("users")
       .where("email", "==", email)
@@ -36,26 +39,27 @@ app.post("/register", async (req, res) => {
     const userRef = db.collection("users").doc();
     const uid = userRef.id;
 
-    await Promise.all([
-      userRef.set({
-        uid,
-        username,
-        email,
-        password: hashed,
-        role: role ?? "user",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      }),
+    const userData = {
+      uid,
+      username,
+      email,
+      password: hashed,
+      role: role ?? "user",
+      avartarURL, // ✅ บังคับว่าต้องมี
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
 
-      
-    ]);
+    await userRef.set(userData);
 
     res.json({ message: "สมัครสมาชิกสำเร็จ" });
 
-  } catch (e) {
-    console.error("REGISTER ERROR:", e);
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: "server error" });
   }
 });
+
+
 
 // Login route
 app.post("/login", async (req, res) => {
@@ -104,6 +108,7 @@ app.post("/login", async (req, res) => {
         email: userData.email,
         name: userData.name || userData.username, // เพิ่ม name
         role: userData.role,
+        avartarURL: userData.avartarURL
       }
     });
   } catch (e) {
@@ -408,29 +413,31 @@ app.post("/newproject", async (req, res) => {
       template: template || "",
       description: description || "",
       images: null,
-      members: [], // รายชื่อเพื่อนร่วมทำงาน
+
+      // ฟิลเปล่าสำหรับสมาชิกและ permission
+      members: [],
+
       createdBy: createdBy || { uid: "admin", name: "admin" },
       createdAt: new Date().toISOString(),
     });
 
-    // 2️⃣ สร้าง project_details เป็น sub-collection
+    // 2️⃣ สร้าง project_details เป็น sub-collection ฟิลเปล่า
     const detailsRef = projectRef.collection("details").doc("main");
     await detailsRef.set({
-      Sequences: [{ WaitToStart: null, Final: null, Inprogress: null, blank: null }],
-      ShotStatus: [{ Final: null, WaitToStart: null, Inprogress: null, blank: null }],
-      AssetStatus: [
-        { Art: null, Model: null, Rig: null, Texture: null, Layout: null, Animation: null, FX: null, Light: null, Comp: null }
-      ],
+      Sequences: [],
+      ShotStatus: [],
+      AssetStatus: [],
       createdAt: new Date().toISOString(),
     });
 
-    // 3️⃣ สร้าง folder/sub-collections เริ่มต้น (Assets, Shots, Tasks, Media)
+    // 3️⃣ สร้าง folder/sub-collections เปล่า
     const folders = ["Assets", "Shots", "Tasks", "Media"];
     for (const folderName of folders) {
       const folderRef = projectRef.collection(folderName).doc("placeholder");
       await folderRef.set({
         createdAt: new Date().toISOString(),
-        description: `${folderName} folder placeholder`,
+        description: "",
+        permissions: [], // ฟิลเปล่าสำหรับอนุญาตการเข้าถึง
       });
     }
 
@@ -447,6 +454,7 @@ app.post("/newproject", async (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+
 
 
 app.post("/projectdetails", async (req, res) => {
