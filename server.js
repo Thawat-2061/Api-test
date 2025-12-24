@@ -398,50 +398,56 @@ app.post("/newproject", async (req, res) => {
       return res.status(400).json({ error: "missing projectName" });
     }
 
-    const docRef = db.collection("projects").doc();
-    const projectId = docRef.id;
+    // 1️⃣ สร้าง project หลัก
+    const projectRef = db.collection("projects").doc();
+    const projectId = projectRef.id;
 
-    await docRef.set({
-    projectId,
-    projectName,
-    template: template || "",
-    description: description || "",
-    images: null,
-
-    members: [],
-
-    createdBy: createdBy || { uid: "admin", name: "admin" },
-    createdAt: new Date().toISOString(),
-
+    await projectRef.set({
+      projectId,
+      projectName,
+      template: template || "",
+      description: description || "",
+      images: null,
+      members: [], // รายชื่อเพื่อนร่วมทำงาน
+      createdBy: createdBy || { uid: "admin", name: "admin" },
+      createdAt: new Date().toISOString(),
     });
 
-
-    const data_project = db.collection("project_details").doc();
-    await data_project.set({
-      projectId,
-      Sequences: [
-        { WaitToStart: null, Final: null, Inprogress: null, blank: null },
-      ],
-      ShotStatus: [
-        { Final: null, WaitToStart: null, Inprogress: null, blank: null },
-      ],
+    // 2️⃣ สร้าง project_details เป็น sub-collection
+    const detailsRef = projectRef.collection("details").doc("main");
+    await detailsRef.set({
+      Sequences: [{ WaitToStart: null, Final: null, Inprogress: null, blank: null }],
+      ShotStatus: [{ Final: null, WaitToStart: null, Inprogress: null, blank: null }],
       AssetStatus: [
-        { Art: null, Model: null, Rig: null, Texture: null, Layout: null, Animation: null, FX: null, Light: null, Comp: null },
+        { Art: null, Model: null, Rig: null, Texture: null, Layout: null, Animation: null, FX: null, Light: null, Comp: null }
       ],
       createdAt: new Date().toISOString(),
     });
 
-    res.json({ 
-      message: "project created", 
+    // 3️⃣ สร้าง folder/sub-collections เริ่มต้น (Assets, Shots, Tasks, Media)
+    const folders = ["Assets", "Shots", "Tasks", "Media"];
+    for (const folderName of folders) {
+      const folderRef = projectRef.collection(folderName).doc("placeholder");
+      await folderRef.set({
+        createdAt: new Date().toISOString(),
+        description: `${folderName} folder placeholder`,
+      });
+    }
+
+    // 4️⃣ ตอบกลับ client
+    res.json({
+      message: "project created",
       projectId,
       token: "dummy-token",
-      user: createdBy || { uid: "admin", name: "admin"  }
+      user: createdBy || { uid: "admin", name: "admin" },
     });
+
   } catch (err) {
     console.error("NEW_PROJECT ERROR:", err);
     res.status(500).json({ error: String(err) });
   }
 });
+
 
 app.post("/projectdetails", async (req, res) => {
   try {
@@ -497,23 +503,46 @@ app.post("/projectinfo", async (req, res) => {
 });
 
 app.post("/projectlist", async (req, res) => {
-  const {uid} = req.body;
+  const { uid } = req.body;
+
+  if (!uid) {
+    return res.status(400).json({ error: "uid is required" });
+  }
+
   try {
-    let query = db.collection("projects");
+    // 1️⃣ โปรเจกต์ที่เราสร้าง
+    const createdSnap = await db
+      .collection("projects")
+      .where("createdBy.uid", "==", uid)
+      .get();
 
-    if (uid) {
-      query = query.where("createdBy.uid", "==", uid);
-    }
+    // 2️⃣ โปรเจกต์ที่เราเป็นสมาชิก
+    const memberSnap = await db
+      .collection("projects")
+      .where("members", "array-contains", uid)
+      .get();
 
-    const snap = await query.get();
-    const projects = snap.docs.map((doc) => doc.data());
+    // รวมผลลัพธ์ + กันซ้ำ
+    const projectMap = new Map();
+
+    createdSnap.docs.forEach(doc => {
+      projectMap.set(doc.id, { id: doc.id, ...doc.data() });
+    });
+
+    memberSnap.docs.forEach(doc => {
+      projectMap.set(doc.id, { id: doc.id, ...doc.data() });
+    });
+
+    const projects = Array.from(projectMap.values());
 
     res.json({ projects });
+
   } catch (err) {
     console.error("PROJECT_LIST ERROR:", err);
     res.status(500).json({ error: String(err) });
-  }   
+  }
 });
+
 
 app.post("/projectimage", async (req, res) => {
   try {
