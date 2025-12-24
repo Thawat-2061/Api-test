@@ -402,14 +402,19 @@ app.post("/newproject", async (req, res) => {
     const projectId = docRef.id;
 
     await docRef.set({
-      projectId,
-      projectName,
-      template: template || "",
-      description: description || "",
-      images: null,
-      createdBy: createdBy || { uid: "admin", name: "admin" },
-      createdAt: new Date().toISOString(),
+    projectId,
+    projectName,
+    template: template || "",
+    description: description || "",
+    images: null,
+
+    members: [],
+
+    createdBy: createdBy || { uid: "admin", name: "admin" },
+    createdAt: new Date().toISOString(),
+
     });
+
 
     const data_project = db.collection("project_details").doc();
     await data_project.set({
