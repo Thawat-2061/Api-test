@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import bcrypt from "bcrypt";
 
-import { db, bucket } from "./firebaseAdmin.js";
+import { admin, db, bucket } from "./firebaseAdmin.js";
 
 const app = express();
 
@@ -14,38 +14,45 @@ app.use(express.urlencoded({ extended: true }));
 // Registration route
 app.post("/register", async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    const { username, email, password, role } = req.body ?? {};
+
     if (!username || !email || !password) {
       return res.status(400).json({ error: "กรุณากรอกข้อมูลให้ครบ" });
     }
 
-    const snap = await db.collection("users").where("email", "==", email).get();
+    // 🔍 check duplicate email
+    const snap = await db
+      .collection("users")
+      .where("email", "==", email)
+      .limit(1)
+      .get();
+
     if (!snap.empty) {
       return res.status(400).json({ error: "อีเมลนี้มีผู้ใช้งานแล้ว" });
     }
 
     const hashed = await bcrypt.hash(password, 10);
 
-    const ref = db.collection("users").doc();
-    await ref.set({
-      uid: ref.id,
-      username,
-      email,
-      password: hashed,
-      role: role || "user",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const userRef = db.collection("users").doc();
+    const uid = userRef.id;
 
-    const ref2 = db.collection("friends").doc();
-    await ref2.set({
-      uid: ref.id,
-      friendsList: [],
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    }); 
+    await Promise.all([
+      userRef.set({
+        uid,
+        username,
+        email,
+        password: hashed,
+        role: role ?? "user",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }),
+
+      
+    ]);
 
     res.json({ message: "สมัครสมาชิกสำเร็จ" });
+
   } catch (e) {
-    console.error(e);
+    console.error("REGISTER ERROR:", e);
     res.status(500).json({ error: "server error" });
   }
 });
