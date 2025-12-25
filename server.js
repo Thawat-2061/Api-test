@@ -1,8 +1,8 @@
+import "dotenv/config"; 
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcrypt";
-
-import { admin, db, bucket } from "./firebaseAdmin.js";
+import { supabase } from "./supabaseClient.js";
 
 const app = express();
 
@@ -10,585 +10,874 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* ---------- ROUTES ---------- */
-// Registration route
+/* ---------- REGISTER ---------- */
 app.post("/register", async (req, res) => {
   try {
-    const { username, email, password, role, avartarURL } = req.body ?? {};
+    const { username, email, password, role, avartarURL } = req.body;
+    const finalAvatarURL = avartarURL;
 
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: "กรุณากรอกข้อมูลให้ครบ" });
+    if (!username || !email || !password || !finalAvatarURL) {
+      return res.status(400).json({
+        error: "MISSING_FIELDS",
+        message: "Username, email, password and avatar are required",
+      });
     }
 
-    if (!avartarURL || typeof avartarURL !== "string") {
-      return res.status(400).json({ error: "avartarURL is required" });
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: "WEAK_PASSWORD",
+        message: "Password must be at least 6 characters",
+      });
     }
 
-    const snap = await db
-      .collection("users")
-      .where("email", "==", email)
-      .limit(1)
-      .get();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedUsername = username.trim();
 
-    if (!snap.empty) {
-      return res.status(400).json({ error: "อีเมลนี้มีผู้ใช้งานแล้ว" });
+    const { data: existing, error: checkErr } = await supabase
+      .from("users")
+      .select("id")
+      .or(`email.eq.${normalizedEmail},username.eq.${normalizedUsername}`)
+      .maybeSingle();
+
+    if (checkErr) throw checkErr;
+    if (existing) {
+      return res.status(409).json({
+        error: "DUPLICATE_USER",
+        message: "Email or username already exists",
+      });
     }
 
-    const hashed = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const userRef = db.collection("users").doc();
-    const uid = userRef.id;
+    const { data: user, error: insertErr } = await supabase
+      .from("users")
+      .insert({
+        username: normalizedUsername,
+        email: normalizedEmail,
+        password: hashedPassword,
+        role: role || "Artist",
+        avatar_url: finalAvatarURL,
+      })
+      .select()
+      .single();
 
-    const userData = {
-      uid,
-      username,
-      email,
-      password: hashed,
-      role: role ?? "user",
-      avartarURL, // ✅ บังคับว่าต้องมี
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+    if (insertErr) throw insertErr;
 
-    await userRef.set(userData);
+    console.log("✅ User registered:", user.id);
 
-    res.json({ message: "สมัครสมาชิกสำเร็จ" });
-
+    res.status(201).json({
+      message: "Registration successful",
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatarURL: user.avatar_url,
+      },
+    });
   } catch (err) {
-    console.error("REGISTER ERROR:", err);
-    res.status(500).json({ error: "server error" });
+    console.error("❌ REGISTER ERROR:", err);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Registration failed",
+    });
   }
 });
 
-
-
-// Login route
+/* ---------- LOGIN ---------- */
 app.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body;
+
     if (!identifier || !password) {
-      return res.status(400).json({ error: "กรุณาใส่ email หรือ username และ password" });
+      return res.status(400).json({
+        error: "MISSING_CREDENTIALS",
+        message: "Email/Username and password required",
+      });
     }
 
-    const usersRef = db.collection("users");
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("*")
+      .or(`email.eq.${identifier.toLowerCase()},username.eq.${identifier}`)
+      .maybeSingle();
 
-    // เช็ค email ก่อน
-    let snapshot = await usersRef
-      .where("email", "==", identifier)
-      .limit(1)
-      .get();
+    if (error) throw error;
 
-    // ถ้าไม่เจอ email → เช็ค username
-    if (snapshot.empty) {
-      snapshot = await usersRef
-        .where("username", "==", identifier)
-        .limit(1)
-        .get();
+    if (!user || !user.password) {
+      return res.status(401).json({
+        error: "INVALID_LOGIN",
+        message: "Invalid email/username or password",
+      });
     }
 
-    if (snapshot.empty) {
-      return res.status(401).json({ error: "User not found" });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) {
+      return res.status(401).json({
+        error: "INVALID_LOGIN",
+        message: "Invalid email/username or password",
+      });
     }
 
-    const userDoc = snapshot.docs[0];
-    const userData = userDoc.data();
-
-    // เช็ค password
-    const isValid = await bcrypt.compare(password, userData.password);
-    if (!isValid) {
-      return res.status(401).json({ error: "Invalid password" });
-    }
-
-    // ส่ง response ในรูปแบบที่ Frontend ต้องการ
     res.json({
-      message: "เข้าสู่ระบบสำเร็จ",
-      token: "dummy-token", // ถ้ามี JWT ให้สร้างตรงนี้
+      message: "Login successful",
       user: {
-        uid: userData.uid,
-        username: userData.username,
-        email: userData.email,
-        name: userData.name || userData.username, // เพิ่ม name
-        role: userData.role,
-        avartarURL: userData.avartarURL
-      }
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatarURL: user.avatar_url,
+      },
     });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "server error" });
+  } catch (err) {
+    console.error("❌ LOGIN ERROR:", err);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Login failed",
+    });
   }
 });
+
+/* ---------- GET USER ---------- */
 app.post("/getuser", async (req, res) => {
   try {
-    const { uid } = req.body;
-    if (!uid) {
-      return res.status(400).json({ error: "กรุณาส่ง uid" });
-    }
-
-    const ref = db.collection("users").doc(uid);
-    const doc = await ref.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ error: "ไม่พบบัญชีผู้ใช้" });
-    }
-
-    const data = doc.data();
-    res.json({
-      uid: data.uid,
-      username: data.username,
-      email: data.email,
-      role: data.role,
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ 
+      message: "Please provide user id",
+      error: "MISSING_ID" 
     });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "server error" });
+
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, username, email, role, avatar_url, created_at")
+      .eq("id", id)
+      .single();
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).json({ 
+          message: "User not found",
+          error: "USER_NOT_FOUND" 
+        });
+      }
+      throw error;
+    }
+
+    res.json({
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        avatarURL: user.avatar_url,
+        createdAt: user.created_at,
+      },
+    });
+  } catch (err) {
+    console.error("❌ GET USER ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to fetch user",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
+/* ---------- SEARCH USER ---------- */
 app.post("/searchuser", async (req, res) => {
   try {
     let { query } = req.body;
+    if (!query) return res.status(400).json({ 
+      message: "Please provide search query",
+      error: "MISSING_QUERY" 
+    });
 
-    if (!query) {
-      return res.status(400).json({ error: "กรุณาส่ง query" });
-    }
-
-    // normalize
     query = query.toLowerCase().trim();
 
-    const usersRef = db.collection("users");
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, username, email, avatar_url, role")
+      .ilike("username", `%${query}%`)
+      .limit(10);
 
-    /* 🔹 query ที่ 1 : searchKeywords (แนะนำ) */
-    const keywordSnap = await usersRef
-      .where("searchKeywords", "array-contains", query)
-      .limit(10)
-      .get();
+    if (error) throw error;
 
-    let docs = keywordSnap.docs;
-
-    /* 🔹 fallback (กรณี user เก่าไม่มี searchKeywords) */
-    if (docs.length === 0) {
-      const [usernameSnap, emailSnap] = await Promise.all([
-        usersRef
-          .where("username", ">=", query)
-          .where("username", "<=", query + "\uf8ff")
-          .limit(10)
-          .get(),
-
-        usersRef
-          .where("email", ">=", query)
-          .where("email", "<=", query + "\uf8ff")
-          .limit(10)
-          .get(),
-      ]);
-
-      // merge + กันซ้ำ
-      const map = new Map();
-      [...usernameSnap.docs, ...emailSnap.docs].forEach((doc) => {
-        map.set(doc.id, doc);
-      });
-
-      docs = [...map.values()];
-    }
-
-    const results = docs.map((doc) => {
-      const data = doc.data();
-      return {
-        uid: data.uid || doc.id,
-        username: data.username,
-        email: data.email,
-      };
-    });
+    const results = users.map((u) => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      avatarURL: u.avatar_url,
+      role: u.role,
+    }));
 
     res.json({ results });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "server error" });
+    console.error("❌ SEARCH USER ERROR:", err);
+    res.status(500).json({ 
+      message: "Search failed",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
-
-// Add friend route
-
+/* ---------- ADD FRIEND ---------- */
 app.put("/addfriend", async (req, res) => {
   try {
     const { uid, friendUid } = req.body;
 
     if (!uid || !friendUid) {
-      return res.status(400).json({ error: "กรุณาส่ง uid และ friendUid" });
+      return res.status(400).json({ 
+        message: "Please provide uid and friendUid",
+        error: "MISSING_FIELDS" 
+      });
     }
 
-    /* 1. ตรวจสอบ friendUid จาก users */
-    const friendRef = db.collection("users").doc(friendUid);
-    const friendDoc = await friendRef.get();
-
-    if (!friendDoc.exists) {
-      return res.status(404).json({ error: "ไม่พบบัญชีเพื่อน" });
+    if (uid === friendUid) {
+      return res.status(400).json({ 
+        message: "Cannot add yourself as a friend",
+        error: "SELF_ADD" 
+      });
     }
 
-    /* 2. อ้างอิง friends/{uid} */
-    const userFriendRef = db.collection("friends").doc(uid);
-    const userFriendDoc = await userFriendRef.get();
+    const { data: friendExists, error: friendCheckError } = await supabase
+      .from("users")
+      .select("id")
+      .eq("id", friendUid)
+      .maybeSingle();
 
-    let friendsList = [];
-
-    if (userFriendDoc.exists) {
-      friendsList = userFriendDoc.data().friendsList || [];
-
-      if (friendsList.includes(friendUid)) {
-        return res.status(400).json({ error: "เพื่อนนี้ถูกเพิ่มแล้ว" });
-      }
+    if (friendCheckError) throw friendCheckError;
+    if (!friendExists) {
+      return res.status(404).json({ 
+        message: "Friend user not found",
+        error: "FRIEND_NOT_FOUND" 
+      });
     }
 
-    /* 3. เพิ่ม friendUid */
+    const { data: existing, error: fetchError } = await supabase
+      .from("friends")
+      .select("friends_list")
+      .eq("uid", uid)
+      .maybeSingle();
+
+    if (fetchError && fetchError.code !== "PGRST116") throw fetchError;
+
+    let friendsList = existing?.friends_list || [];
+
+    if (friendsList.includes(friendUid)) {
+      return res.status(400).json({ 
+        message: "Friend already added",
+        error: "ALREADY_FRIENDS" 
+      });
+    }
+
     friendsList.push(friendUid);
 
-    /* 4. ใช้ set + merge เพื่อรองรับกรณีไม่มี doc */
-    await userFriendRef.set(
-      {
-        friendsList,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const { error: upsertError } = await supabase
+      .from("friends")
+      .upsert({ uid, friends_list: friendsList }, { onConflict: "uid" });
 
-    res.json({
-      message: "เพิ่มเพื่อนสำเร็จ",
-      friendsList,
-    });
+    if (upsertError) throw upsertError;
+
+    console.log("✅ Friend added:", uid, "->", friendUid);
+
+    res.json({ message: "Friend added successfully", friendsList });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "server error" });
+    console.error("❌ ADD FRIEND ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to add friend",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
-// Profile update route
+/* ---------- GET FRIENDS ---------- */
+app.post("/getfriends", async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) return res.status(400).json({ 
+      message: "Please provide uid",
+      error: "MISSING_UID" 
+    });
+
+    const { data: friendsData, error: fetchError } = await supabase
+      .from("friends")
+      .select("friends_list")
+      .eq("uid", uid)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+
+    const friendsList = friendsData?.friends_list || [];
+
+    if (friendsList.length === 0) {
+      return res.json({ friends: [] });
+    }
+
+    const { data: friends, error: friendsError } = await supabase
+      .from("users")
+      .select("id, username, email, avatar_url, role")
+      .in("id", friendsList);
+
+    if (friendsError) throw friendsError;
+
+    const friendsWithDetails = friends.map((f) => ({
+      id: f.id,
+      username: f.username,
+      email: f.email,
+      avatarURL: f.avatar_url,
+      role: f.role,
+    }));
+
+    res.json({ friends: friendsWithDetails });
+  } catch (err) {
+    console.error("❌ GET FRIENDS ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to fetch friends",
+      error: "SERVER_ERROR" 
+    });
+  }
+});
+
+/* ---------- PROFILE UPDATE ---------- */
 app.post("/profile", async (req, res) => {
   try {
     const { uid, username, email } = req.body;
+
     if (!uid) {
-      return res.status(400).json({ error: "กรุณาส่ง uid ของผู้ใช้" });
+      return res.status(400).json({ 
+        message: "Please provide user id",
+        error: "MISSING_UID" 
+      });
     }
 
-    const ref = db.collection("users").doc(uid);
-    await ref.update({
-      username,
-      email,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const updateData = {
+      updated_at: new Date().toISOString(),
+    };
 
-    res.json({ message: "อัปเดตโปรไฟล์สำเร็จ" });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "server error" });
+    if (username) updateData.username = username;
+    if (email) updateData.email = email.toLowerCase();
+
+    const { error } = await supabase
+      .from("users")
+      .update(updateData)
+      .eq("id", uid);
+
+    if (error) throw error;
+
+    console.log("✅ Profile updated:", uid);
+
+    res.json({ message: "Profile updated successfully" });
+  } catch (err) {
+    console.error("❌ PROFILE UPDATE ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to update profile",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
-// Password change route
+/* ---------- CHANGE PASSWORD ---------- */
 app.post("/changepass", async (req, res) => {
   try {
     const { uid, oldPassword, newPassword } = req.body;
+
     if (!uid || !oldPassword || !newPassword) {
-      return res.status(400).json({ error: "กรุณากรอกข้อมูลให้ครบ" });
+      return res.status(400).json({ 
+        message: "Please fill in all fields",
+        error: "MISSING_FIELDS" 
+      });
     }
 
-    const ref = db.collection("users").doc(uid);
-    const doc = await ref.get();
-    if (!doc.exists) {
-      return res.status(404).json({ error: "ไม่พบบัญชีผู้ใช้" });
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: "New password must be at least 6 characters",
+        error: "PASSWORD_TOO_SHORT" 
+      });
     }
 
-    const user = doc.data();
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("password")
+      .eq("id", uid)
+      .single();
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).json({ 
+          message: "User not found",
+          error: "USER_NOT_FOUND" 
+        });
+      }
+      throw error;
+    }
+
     const match = await bcrypt.compare(oldPassword, user.password);
     if (!match) {
-      return res.status(401).json({ error: "รหัสผ่านเก่าไม่ถูกต้อง" });
+      return res.status(401).json({ 
+        message: "Old password is incorrect",
+        error: "INVALID_OLD_PASSWORD" 
+      });
     }
 
     const hashed = await bcrypt.hash(newPassword, 10);
-    await ref.update({
-      password: hashed,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
 
-    res.json({ message: "เปลี่ยนรหัสผ่านสำเร็จ" });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "server error" });
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({
+        password: hashed,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", uid);
+
+    if (updateError) throw updateError;
+
+    console.log("✅ Password changed:", uid);
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("❌ CHANGE PASSWORD ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to change password",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
-//upload pending file route
+/* ---------- UPLOAD FILE/IMAGE ---------- */
 app.post("/upload", async (req, res) => {
   try {
-    const {
-      projectId,        // ⭐ เพิ่มตรงนี้
-      downloadURL,
-      filename,
-      type,
-      description,
-      uploadedBy,
-      storagePath,
-    } = req.body;
+    const { projectId, downloadURL, filename, storagePath, type, description } = req.body;
 
-    if (!downloadURL || !type || !storagePath || !projectId) {  // ⭐ เช็ค projectId
-      return res.status(400).json({ error: "missing required fields" });
+    if (!projectId || !downloadURL) {
+      return res.status(400).json({ 
+        message: "Please provide projectId and downloadURL",
+        error: "MISSING_FIELDS" 
+      });
     }
 
-    const docRef = db.collection("files_project").doc();
-    const file_id = docRef.id;
+    console.log("📤 Upload request:", { projectId, filename, type });
 
-    await docRef.set({
-      file_id,
-      projectId,        
-      downloadURL,
-      filename: filename || "",
-      type,
-      description: description || "",
-      storagePath,
-      createdAt: new Date().toISOString(),
-    });
+    // บันทึกไฟล์ไปยัง files_project table
+    const { data: uploadRecord, error: insertError } = await supabase
+      .from("files_project")
+      .insert([
+        {
+          project_id: projectId,
+          download_url: downloadURL,
+          filename: filename || "untitled",
+          storage_path: storagePath || filename,
+          type: type || "images",
+          description: description || "",
+          created_at: new Date().toISOString(),
+        },
+      ])
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("❌ Insert error:", insertError);
+      throw insertError;
+    }
+
+    console.log("✅ File uploaded successfully:", uploadRecord.id);
 
     res.json({
-      message: "upload success (pending)",
-      file_id,
-      downloadURL  // ⭐ ส่งกลับไปด้วย
+      message: "File uploaded successfully",
+      file: {
+        id: uploadRecord.id,
+        projectId: uploadRecord.project_id,
+        fileUrl: uploadRecord.download_url,
+        filename: uploadRecord.filename,
+        fileType: uploadRecord.type,
+      },
     });
   } catch (err) {
-    console.error("UPLOAD ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ UPLOAD ERROR:", err);
+    res.status(500).json({
+      message: "Failed to upload file",
+      error: "SERVER_ERROR",
+      details: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
   }
 });
 
-
-app.post("/getProjectImages", async (req, res) => {
+/* ---------- GET PROJECT IMAGES ---------- */
+app.post("/getprojectimages", async (req, res) => {
   try {
     const { projectIds } = req.body;
 
     if (!projectIds || !Array.isArray(projectIds)) {
-      return res.status(400).json({ error: "projectIds array required" });
+      return res.status(400).json({ 
+        message: "Please provide projectIds as array",
+        error: "INVALID_PROJECT_IDS" 
+      });
     }
 
+    console.log("🖼️ Fetching images for projects:", projectIds);
+
+    // ดึงรูปภาพล่าสุดจาก files_project โดยเอาเฉพาะรูปที่มี type = 'images'
+    const { data: files, error } = await supabase
+      .from("files_project")
+      .select("project_id, download_url, created_at")
+      .in("project_id", projectIds)
+      .eq("type", "images")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // สร้าง object ที่เก็บรูปล่าสุดของแต่ละ project
     const images = {};
-
-    for (const projectId of projectIds) {
-      const snapshot = await db
-        .collection("files_project")
-        .where("projectId", "==", projectId)
-        .where("type", "==", "images")
-        .get();  
-
-      if (!snapshot.empty) {
-        const docs = snapshot.docs
-          .map(doc => doc.data())
-          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        
-        if (docs.length > 0) {
-          images[projectId] = docs[0].downloadURL;
-        }
+    
+    files.forEach((file) => {
+      // เก็บเฉพาะรูปแรกของแต่ละ project (ล่าสุด)
+      if (!images[file.project_id]) {
+        images[file.project_id] = file.download_url;
       }
-    }
+    });
 
-    console.log("📸 Fetched images:", images);
+    console.log("✅ Images fetched:", Object.keys(images).length);
+
     res.json({ images });
-
   } catch (err) {
     console.error("❌ GET PROJECT IMAGES ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    res.status(500).json({ 
+      message: "Failed to fetch images",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
+/* ---------- NEW PROJECT ---------- */
 app.post("/newproject", async (req, res) => {
   try {
     const { projectName, description, createdBy, template } = req.body;
 
     if (!projectName) {
-      return res.status(400).json({ error: "missing projectName" });
-    }
-
-    // 1️⃣ สร้าง project หลัก
-    const projectRef = db.collection("projects").doc();
-    const projectId = projectRef.id;
-
-    await projectRef.set({
-      projectId,
-      projectName,
-      template: template || "",
-      description: description || "",
-      images: null,
-
-      // ฟิลเปล่าสำหรับสมาชิกและ permission
-      members: [],
-
-      createdBy: createdBy || { uid: "admin", name: "admin" },
-      createdAt: new Date().toISOString(),
-    });
-
-    // 2️⃣ สร้าง project_details เป็น sub-collection ฟิลเปล่า
-    const detailsRef = projectRef.collection("details").doc("main");
-    await detailsRef.set({
-      Sequences: [],
-      ShotStatus: [],
-      AssetStatus: [],
-      createdAt: new Date().toISOString(),
-    });
-
-    // 3️⃣ สร้าง folder/sub-collections เปล่า
-    const folders = ["Assets", "Shots", "Tasks", "Media"];
-    for (const folderName of folders) {
-      const folderRef = projectRef.collection(folderName).doc("placeholder");
-      await folderRef.set({
-        createdAt: new Date().toISOString(),
-        description: "",
-        permissions: [], // ฟิลเปล่าสำหรับอนุญาตการเข้าถึง
+      return res.status(400).json({ 
+        message: "Please provide project name",
+        error: "MISSING_PROJECT_NAME" 
       });
     }
 
-    // 4️⃣ ตอบกลับ client
-    res.json({
-      message: "project created",
-      projectId,
-      token: "dummy-token",
-      user: createdBy || { uid: "admin", name: "admin" },
-    });
+    console.log("🆕 Creating new project:", projectName);
 
+    const creatorInfo = createdBy || { uid: "admin", name: "admin" };
+
+    // 1️⃣ สร้าง project หลัก
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .insert([
+        {
+          project_name: projectName,
+          template: template || "",
+          description: description || "",
+          images: null,
+          members: [],
+          created_by: creatorInfo,
+          created_at: new Date().toISOString(),
+        },
+      ])
+      .select()
+      .single();
+
+    if (projectError) throw projectError;
+
+    const projectId = project.id;
+    console.log("✅ Project created with ID:", projectId);
+
+    // 2️⃣ สร้าง project_details
+    const { error: detailsError } = await supabase
+      .from("project_details")
+      .insert([
+        {
+          project_id: projectId,
+          sequences: [],
+          shot_status: [],
+          asset_status: [],
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+    if (detailsError) {
+      console.error("❌ Details creation error:", detailsError);
+      throw detailsError;
+    }
+    console.log("✅ Project details created");
+
+    // 3️⃣ สร้าง default folders (Assets, Shots, Tasks, Media)
+    const defaultFolders = [
+      { name: "Assets", description: "Asset management folder" },
+      { name: "Shots", description: "Shot management folder" },
+      { name: "Tasks", description: "Task management folder" },
+      { name: "Media", description: "Media files folder" },
+    ];
+
+    const folderInserts = defaultFolders.map((folder) => ({
+      project_id: projectId,
+      folder_name: folder.name,
+      description: folder.description,
+      permissions: [],
+      created_at: new Date().toISOString(),
+    }));
+
+    const { error: foldersError } = await supabase
+      .from("project_folders")
+      .insert(folderInserts);
+
+    if (foldersError) {
+      console.error("❌ Folders creation error:", foldersError);
+      throw foldersError;
+    }
+    console.log("✅ Default folders created");
+
+    console.log("🎉 Project setup completed:", projectId);
+
+    res.status(201).json({
+      message: "Project created successfully",
+      projectId,
+      project: {
+        projectId,
+        projectName,
+      },
+      token: "dummy-token",
+      user: creatorInfo,
+    });
   } catch (err) {
-    console.error("NEW_PROJECT ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ NEW_PROJECT ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to create project",
+      error: "SERVER_ERROR",
+      details: process.env.NODE_ENV === "development" ? String(err) : undefined,
+    });
   }
 });
 
-
-
+/* ---------- PROJECT DETAILS ---------- */
 app.post("/projectdetails", async (req, res) => {
   try {
     const { projectId } = req.body;
 
     if (!projectId) {
-      return res.status(400).json({ error: "missing projectId" });
+      return res.status(400).json({ 
+        message: "Please provide project id",
+        error: "MISSING_PROJECT_ID" 
+      });
     }
 
-    const projectDoc = await db.collection("projects").doc(projectId).get();
-    
-    if (!projectDoc.exists) {
-      return res.status(404).json({ error: "project not found" });
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .single();
+
+    if (projectError) {
+      if (projectError.code === "PGRST116") {
+        return res.status(404).json({ 
+          message: "Project not found",
+          error: "PROJECT_NOT_FOUND" 
+        });
+      }
+      throw projectError;
     }
 
-    const detailsRef = db.collection("project_details").where("projectId", "==", projectId);
-    const detailsSnap = await detailsRef.get();
+    const { data: details, error: detailsError } = await supabase
+      .from("project_details")
+      .select("*")
+      .eq("project_id", projectId)
+      .maybeSingle();
 
-    const projectDetails = detailsSnap.empty ? null : detailsSnap.docs[0].data();
+    if (detailsError && detailsError.code !== "PGRST116") throw detailsError;
 
-    res.json({ 
+    res.json({
       project: {
-        ...projectDoc.data(), 
-        projectId: projectId
+        ...project,
+        projectId: project.id,
+        projectName: project.project_name,
+        createdAt: project.created_at,
+        createdBy: project.created_by,
       },
-      projectDetails: projectDetails 
+      projectDetails: details,
     });
   } catch (err) {
-    console.error("PROJECT_DETAILS ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ PROJECT_DETAILS ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to fetch project details",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
+/* ---------- PROJECT INFO ---------- */
 app.post("/projectinfo", async (req, res) => {
   try {
     const { projectId } = req.body;
 
     if (!projectId) {
-      return res.status(400).json({ error: "missing projectId" });
+      return res.status(400).json({ 
+        message: "Please provide project id",
+        error: "MISSING_PROJECT_ID" 
+      });
     }
 
-    const doc = await db.collection("projects").doc(projectId).get();
+    const { data: project, error } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .single();
 
-    if (!doc.exists) {
-      return res.status(404).json({ error: "project not found" });
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).json({ 
+          message: "Project not found",
+          error: "PROJECT_NOT_FOUND" 
+        });
+      }
+      throw error;
     }
 
-    res.json({ project: doc.data() });
+    res.json({ 
+      project: {
+        ...project,
+        projectId: project.id,
+        projectName: project.project_name,
+      }
+    });
   } catch (err) {
-    console.error("PROJECT_INFO ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ PROJECT_INFO ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to fetch project info",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
+/* ---------- PROJECT LIST ---------- */
 app.post("/projectlist", async (req, res) => {
-  const { uid } = req.body;
-
-  if (!uid) {
-    return res.status(400).json({ error: "uid is required" });
-  }
-
   try {
-    // 1️⃣ โปรเจกต์ที่เราสร้าง
-    const createdSnap = await db
-      .collection("projects")
-      .where("createdBy.uid", "==", uid)
-      .get();
+    const { uid } = req.body;
 
-    // 2️⃣ โปรเจกต์ที่เราเป็นสมาชิก
-    const memberSnap = await db
-      .collection("projects")
-      .where("members", "array-contains", uid)
-      .get();
+    if (!uid) {
+      return res.status(400).json({ 
+        message: "Please provide user id",
+        error: "MISSING_UID" 
+      });
+    }
 
-    // รวมผลลัพธ์ + กันซ้ำ
+    console.log("📋 Fetching projects for user:", uid);
+
+    // 1️⃣ โปรเจกต์ที่เราสร้าง (created_by.uid)
+    const { data: createdProjects, error: createdError } = await supabase
+      .from("projects")
+      .select("*")
+      .contains("created_by", { uid });
+
+    if (createdError) throw createdError;
+
+    // 2️⃣ โปรเจกต์ที่เราเป็นสมาชิก (members array contains uid)
+    const { data: memberProjects, error: memberError } = await supabase
+      .from("projects")
+      .select("*")
+      .contains("members", [uid]);
+
+    if (memberError) throw memberError;
+
+    // รวมผลลัพธ์และกันซ้ำด้วย Map
     const projectMap = new Map();
 
-    createdSnap.docs.forEach(doc => {
-      projectMap.set(doc.id, { id: doc.id, ...doc.data() });
-    });
-
-    memberSnap.docs.forEach(doc => {
-      projectMap.set(doc.id, { id: doc.id, ...doc.data() });
+    [...(createdProjects || []), ...(memberProjects || [])].forEach((project) => {
+      projectMap.set(project.id, {
+        projectId: project.id,
+        id: project.id,
+        projectName: project.project_name,
+        createdAt: project.created_at,
+        createdBy: project.created_by,
+        description: project.description,
+        status: "Active",
+        template: project.template,
+        members: project.members,
+        images: project.images,
+      });
     });
 
     const projects = Array.from(projectMap.values());
 
-    res.json({ projects });
+    console.log("✅ Projects fetched:", projects.length);
 
+    res.json({ projects });
   } catch (err) {
-    console.error("PROJECT_LIST ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ PROJECT_LIST ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to fetch projects",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
-
+/* ---------- PROJECT IMAGE (อัปเดต images array ใน projects) ---------- */
 app.post("/projectimage", async (req, res) => {
   try {
     const { projectId, imageUrl } = req.body;
 
     if (!projectId || !imageUrl) {
-      return res.status(400).json({ error: "missing fields" });
+      return res.status(400).json({ 
+        message: "Please provide project id and image url",
+        error: "MISSING_FIELDS" 
+      });
     }
 
-    const projectRef = db.collection("projects").doc(projectId);
-    const snap = await projectRef.get();
+    const { data: project, error: fetchError } = await supabase
+      .from("projects")
+      .select("images")
+      .eq("id", projectId)
+      .single();
 
-    if (!snap.exists) {
-      return res.status(404).json({ error: "project not found" });
+    if (fetchError) {
+      if (fetchError.code === "PGRST116") {
+        return res.status(404).json({ 
+          message: "Project not found",
+          error: "PROJECT_NOT_FOUND" 
+        });
+      }
+      throw fetchError;
     }
 
-    const projectData = snap.data();
-    const updatedImages = projectData.images || [];
-    updatedImages.push(imageUrl);
+    const updatedImages = project.images || [];
+    if (!updatedImages.includes(imageUrl)) {
+      updatedImages.push(imageUrl);
+    }
 
-    await projectRef.update({
-      images: updatedImages,
-      updatedAt: new Date().toISOString(),
-    });
+    const { error: updateError } = await supabase
+      .from("projects")
+      .update({
+        images: updatedImages,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", projectId);
 
-    res.json({ message: "image added to project", projectId });
+    if (updateError) throw updateError;
+
+    console.log("✅ Image added to project:", projectId);
+
+    res.json({ message: "Image added to project", projectId });
   } catch (err) {
-    console.error("UPLOAD_PROJECT_IMAGE ERROR:", err);
-    res.status(500).json({ error: String(err) });
+    console.error("❌ UPLOAD_PROJECT_IMAGE ERROR:", err);
+    res.status(500).json({ 
+      message: "Failed to add image to project",
+      error: "SERVER_ERROR" 
+    });
   }
 });
 
 /* ---------- ROOT ---------- */
 app.get("/", (req, res) => {
-  res.send("✅ API with Firestore is running!");
+  res.send("✅ API with Supabase is running!");
 });
 
-/* ---------- LISTEN  ---------- */
+/* ---------- HEALTH CHECK ---------- */
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+/* ---------- LISTEN ---------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
