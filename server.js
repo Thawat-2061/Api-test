@@ -654,39 +654,55 @@ app.post("/newproject", async (req, res) => {
 app.delete("/deleteProject", async (req, res) => {
   const { projectId } = req.body;
 
-  // 1️⃣ validate
   if (!projectId) {
     return res.status(400).json({
       message: "Project ID is required",
-      error: "MISSING_PROJECT_ID",
     });
   }
 
   try {
-    // 2️⃣ delete (ON DELETE CASCADE ทำงาน)
-    const { data, error } = await supabase
+    // 1️⃣ ดึงข้อมูล project มาก่อน (เอา path รูป)
+    const { data: project, error: fetchError } = await supabase
       .from("projects")
-      .delete()
+      .select("id, cover_image")
       .eq("id", projectId)
-      .select("id");
+      .single();
 
-    if (error) {
-      return res.status(500).json({
-        message: "Delete project failed",
-        error: error.message,
-      });
-    }
-
-    if (!data || data.length === 0) {
+    if (fetchError || !project) {
       return res.status(404).json({
         message: "Project not found",
-        error: "PROJECT_NOT_FOUND",
       });
     }
 
-    // 3️⃣ success
+    // 2️⃣ ลบรูปจาก Storage (ถ้ามี)
+    if (project.cover_image) {
+      const { error: storageError } = await supabase.storage
+        .from("project_images")
+        .remove([project.cover_image]);
+
+      if (storageError) {
+        console.error("❌ Storage delete error:", storageError);
+        return res.status(500).json({
+          message: "Failed to delete project image",
+        });
+      }
+    }
+
+    // 3️⃣ ลบ project (CASCADE ลบ detail + folders)
+    const { error: deleteError } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId);
+
+    if (deleteError) {
+      return res.status(500).json({
+        message: "Failed to delete project",
+        error: deleteError.message,
+      });
+    }
+
     res.json({
-      message: "✅ Project deleted successfully (cascade)",
+      message: "✅ Project + images deleted successfully",
       projectId,
     });
   } catch (err) {
