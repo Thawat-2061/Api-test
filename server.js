@@ -657,45 +657,47 @@ app.delete("/deleteProject", async (req, res) => {
   if (!projectId) {
     return res.status(400).json({
       message: "Project ID is required",
-      error: "MISSING_PROJECT_ID",
     });
   }
 
   try {
     /* =======================
-       1️⃣ ลิสต์ไฟล์ทั้งหมดใน folder
+       1️⃣ list ไฟล์ทั้งหมดใน bucket
        ======================= */
-    const folderPath = `projects/${projectId}`;
-
     const { data: files, error: listError } =
       await supabase.storage
         .from("project_images")
-        .list(folderPath, { recursive: true });
+        .list("", { limit: 1000 });
 
     if (listError) {
       console.error("⚠️ List storage error:", listError.message);
     }
 
     /* =======================
-       2️⃣ ลบไฟล์ทั้งหมด (ถ้ามี)
+       2️⃣ filter ไฟล์ที่ขึ้นต้นด้วย projectId
        ======================= */
-    if (files && files.length > 0) {
-      const filePaths = files.map(
-        (file) => `${folderPath}/${file.name}`
-      );
+    const projectFiles =
+      files?.filter((file) =>
+        file.name.startsWith(projectId)
+      ) || [];
+
+    /* =======================
+       3️⃣ ลบไฟล์ทั้งหมดของ project
+       ======================= */
+    if (projectFiles.length > 0) {
+      const paths = projectFiles.map((f) => f.name);
 
       const { error: removeError } = await supabase.storage
         .from("project_images")
-        .remove(filePaths);
+        .remove(paths);
 
       if (removeError) {
         console.error("⚠️ Remove storage error:", removeError.message);
-        // ไม่ throw เพื่อไม่ให้ DB ค้าง
       }
     }
 
     /* =======================
-       3️⃣ ลบ DB (CASCADE)
+       4️⃣ ลบ DB (CASCADE)
        ======================= */
     const { data, error: deleteError } = await supabase
       .from("projects")
@@ -717,7 +719,8 @@ app.delete("/deleteProject", async (req, res) => {
     }
 
     res.json({
-      message: "✅ Project + storage deleted successfully",
+      message: "✅ Project + images deleted successfully",
+      deletedImages: projectFiles.length,
       projectId,
     });
   } catch (err) {
@@ -728,6 +731,7 @@ app.delete("/deleteProject", async (req, res) => {
     });
   }
 });
+
 
 /* ---------- PROJECT DETAILS ---------- */
 app.post("/projectdetails", async (req, res) => {
