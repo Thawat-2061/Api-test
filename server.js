@@ -651,6 +651,53 @@ app.post("/newproject", async (req, res) => {
   }
 });
 
+app.delete("/deleteProject", async (req, res) => {
+  const { projectId } = req.body;
+
+  // 1️⃣ validate
+  if (!projectId) {
+    return res.status(400).json({
+      message: "Project ID is required",
+      error: "MISSING_PROJECT_ID",
+    });
+  }
+
+  try {
+    // 2️⃣ delete (ON DELETE CASCADE ทำงาน)
+    const { data, error } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId)
+      .select("id");
+
+    if (error) {
+      return res.status(500).json({
+        message: "Delete project failed",
+        error: error.message,
+      });
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(404).json({
+        message: "Project not found",
+        error: "PROJECT_NOT_FOUND",
+      });
+    }
+
+    // 3️⃣ success
+    res.json({
+      message: "✅ Project deleted successfully (cascade)",
+      projectId,
+    });
+  } catch (err) {
+    console.error("❌ Delete project error:", err);
+    res.status(500).json({
+      message: "Unexpected error",
+      error: err.message,
+    });
+  }
+});
+
 /* ---------- PROJECT DETAILS ---------- */
 app.post("/projectdetails", async (req, res) => {
   try {
