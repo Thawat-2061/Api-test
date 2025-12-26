@@ -657,52 +657,67 @@ app.delete("/deleteProject", async (req, res) => {
   if (!projectId) {
     return res.status(400).json({
       message: "Project ID is required",
+      error: "MISSING_PROJECT_ID",
     });
   }
 
   try {
-    // 1️⃣ ดึงข้อมูล project มาก่อน (เอา path รูป)
-    const { data: project, error: fetchError } = await supabase
-      .from("projects")
-      .select("id, cover_image")
-      .eq("id", projectId)
-      .single();
+    /* =======================
+       1️⃣ ลิสต์ไฟล์ทั้งหมดใน folder
+       ======================= */
+    const folderPath = `projects/${projectId}`;
 
-    if (fetchError || !project) {
+    const { data: files, error: listError } =
+      await supabase.storage
+        .from("project_images")
+        .list(folderPath, { recursive: true });
+
+    if (listError) {
+      console.error("⚠️ List storage error:", listError.message);
+    }
+
+    /* =======================
+       2️⃣ ลบไฟล์ทั้งหมด (ถ้ามี)
+       ======================= */
+    if (files && files.length > 0) {
+      const filePaths = files.map(
+        (file) => `${folderPath}/${file.name}`
+      );
+
+      const { error: removeError } = await supabase.storage
+        .from("project_images")
+        .remove(filePaths);
+
+      if (removeError) {
+        console.error("⚠️ Remove storage error:", removeError.message);
+        // ไม่ throw เพื่อไม่ให้ DB ค้าง
+      }
+    }
+
+    /* =======================
+       3️⃣ ลบ DB (CASCADE)
+       ======================= */
+    const { data, error: deleteError } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId)
+      .select("id");
+
+    if (deleteError) {
+      return res.status(500).json({
+        message: "Delete project failed",
+        error: deleteError.message,
+      });
+    }
+
+    if (!data || data.length === 0) {
       return res.status(404).json({
         message: "Project not found",
       });
     }
 
-    // 2️⃣ ลบรูปจาก Storage (ถ้ามี)
-    if (project.cover_image) {
-      const { error: storageError } = await supabase.storage
-        .from("project_images")
-        .remove([project.cover_image]);
-
-      if (storageError) {
-        console.error("❌ Storage delete error:", storageError);
-        return res.status(500).json({
-          message: "Failed to delete project image",
-        });
-      }
-    }
-
-    // 3️⃣ ลบ project (CASCADE ลบ detail + folders)
-    const { error: deleteError } = await supabase
-      .from("projects")
-      .delete()
-      .eq("id", projectId);
-
-    if (deleteError) {
-      return res.status(500).json({
-        message: "Failed to delete project",
-        error: deleteError.message,
-      });
-    }
-
     res.json({
-      message: "✅ Project + images deleted successfully",
+      message: "✅ Project + storage deleted successfully",
       projectId,
     });
   } catch (err) {
